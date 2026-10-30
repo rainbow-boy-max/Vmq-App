@@ -11,8 +11,8 @@ android {
         applicationId = "com.shinian.pay"
         minSdk = 21
         targetSdk = 34
-        versionCode = 131
-        versionName = "3.1.1-fix"
+        versionCode = 132
+        versionName = "3.1.2-fix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

@@ -28,6 +28,24 @@
   （`storeType "pkcs12"`），口令由 CI Secrets 注入
 - `.github/workflows/android.yml`：`KEYSTORE_DEFAULT_PATH` 指向 `keystore.p12`
 
+## 2026-10-30 · 扫码权限死锁修复（3.1.2-fix）
+
+文件：`app/src/main/java/com/shinian/pay/ui/MainActivity.java`
+
+本项目 `targetSdk = 34`。Android 13+ 上 `READ_EXTERNAL_STORAGE` 已不可授予
+（被 `READ_MEDIA_IMAGES` 取代），但 `startQrCode()` 仍在相机权限之后强行拦截
+「读存储权限」，导致：`checkSelfPermission` 恒为拒绝 → 申请也不弹窗 → 回调立即
+返回拒绝 → 弹出「请至权限中心打开本应用的文件读写权限」→ 永远进不了扫码页。
+用户在系统设置里授予该项也无效果，因为系统已不再提供该权限。
+
+改动：
+
+1. `startQrCode()` 的存储权限拦截加版本判断，仅在 `Build.VERSION_CODES.Q` 以下生效；
+   Android 10 起直接进入扫码页（扫码本身只需要 CAMERA）。
+2. `pdPermissions()` 在 Android 10+ 直接返回 `true`——该版本起保存图片走 MediaStore
+   （`SaveImageUtils.fileSaveToPublic` 已有 MediaStore 分支），不需要存储权限；
+   Android 11+ 上 `WRITE_EXTERNAL_STORAGE` 更是恒为拒绝。
+
 ## 许可声明
 
 上游与本仓库均遵循 Apache License 2.0，`LICENSE` 文件保持原样未作改动，

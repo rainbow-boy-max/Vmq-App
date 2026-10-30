@@ -1312,11 +1312,16 @@ public class MainActivity extends AppCompatActivity implements OnLongClickListen
             ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.CAMERA}, AppConstants.REQ_PERM_CAMERA);
             return;
         }
-        // 申请文件读写权限（部分朋友遇到相册选图需要读写权限的情况，这里一并写一下）
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            // 申请权限
-            ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, AppConstants.REQ_PERM_EXTERNAL_STORAGE);
-            return;
+        // 文件读写权限只在 Android 10 以下拦截。
+        // Android 13+ 上 READ_EXTERNAL_STORAGE 已不可授予（被 READ_MEDIA_IMAGES 取代），
+        // 若继续拦截会导致永远进不了扫码页 —— 原先就是卡在这里，表现为
+        // 「请至权限中心打开本应用的文件读写权限」后无反应。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                // 申请权限
+                ActivityCompat.requestPermissions(MainActivity.this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, AppConstants.REQ_PERM_EXTERNAL_STORAGE);
+                return;
+            }
         }
         // 二维码扫码
         Intent intent = new Intent(MainActivity.this, CaptureActivity.class);
@@ -1716,11 +1721,13 @@ public class MainActivity extends AppCompatActivity implements OnLongClickListen
         return "";
     }
 
-    //判断读写权限
+    //判断读写权限（Android 10 起走分区存储，保存图片用 MediaStore，无需该权限；
+    //Android 11+ 上 WRITE_EXTERNAL_STORAGE 更是恒为拒绝，故直接放行）
     private boolean pdPermissions() {
-        boolean qx = false;
-        qx = ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
-        return qx;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return true;
+        }
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED;
     }
 
     //动态申请读写权限
