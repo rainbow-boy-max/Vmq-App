@@ -39,6 +39,9 @@ public class PayNotificationListenerService extends NotificationListenerService 
     private PowerManager.WakeLock mWakeLock = null;
     private OkHttpClient okHttpClient; // 复用 OkHttpClient 实例
     private Handler mainHandler; // 复用主线程 Handler
+    private String lastHeartbeatError = null;   // 上次记录的错误（用于去重）
+    private long lastHeartbeatErrorAt = 0L;
+    private int heartbeatOkStreak = 0;          // 连续成功次数
 
     // MD5 加密
     public static String md5(String string) {
@@ -76,18 +79,21 @@ public class PayNotificationListenerService extends NotificationListenerService 
     public void initAppHeart() {
         Log.d(TAG, "开始启动心跳线程");
 
-        // 防止重复启动
-        if (newThread != null) {
+        // 防止重复启动；线程已死时必须能重建（原实现只看引用，线程死掉就永远不再起）
+        if (newThread != null && newThread.isAlive()) {
             return;
         }
         // 申请设备电源锁
         acquireWakeLock(this);
 
-        // 初始化复用的 OkHttpClient
+        // 不复用连接池：手机长期在线时复用的 TCP 会被运营商 NAT / 路由器静默回收，
+        // 复用时请求已写出却读不到响应，OkHttp 对"已发出后的读超时"不重试，直接判失败
         if (okHttpClient == null) {
             okHttpClient = new OkHttpClient.Builder()
-                    .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
-                    .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                    .connectionPool(new ConnectionPool(0, 1, java.util.concurrent.TimeUnit.MILLISECONDS))
+                    .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+                    .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                    .retryOnConnectionFailure(true)
                     .build();
         }
 
@@ -98,39 +104,34 @@ public class PayNotificationListenerService extends NotificationListenerService 
                 host = read.getString("host", "");
                 key = read.getString("key", "");
 
-                String t = String.valueOf(new Date().getTime());
-                String sign = md5(t + key);
-                Request request = new Request.Builder()
-                        .url("http://" + host + "/appHeart?t=" + t + "&sign=" + sign)
-                        .method("GET", null)
-                        .build();
-
-                Call call = okHttpClient.newCall(request);
-                call.enqueue(new Callback() {
-                    @Override
-                    public void onFailure(Call call, IOException e) {
-                        final String error = e.getMessage();
-                        mainHandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-
-                                if (MainActivity.LogsTextView != null && !MainActivity.LogsTextView.getText().toString().contains("心跳状态错误")) {
-                                    //发送监听日志
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                                        sendMonitorLogs(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date())
-                                                + "\r\r\r\r" + "心跳状态错误，请重新配置或切换网络环境!\n错误详情：" + error);
-                                    }
-                                    Toast.makeText(getApplicationContext(), "心跳状态错误，请重新配置或切换网络!", Toast.LENGTH_SHORT).show();
-                                }
+                if (host != null && host.length() > 0 && key != null && key.length() > 0) {
+                    String err = heartbeatOnce();
+                    if (err == null) {
+                        final int streak = ++heartbeatOkStreak;
+                        mainHandler.post(() -> {
+                            if (lastHeartbeatError != null) {
+                                lastHeartbeatError = null;
+                                logLine("心跳已恢复正常");
+                            } else if (streak % 60 == 0) {
+                                // 连续成功 60 次（约 50 分钟）留一条痕迹，便于确认链路正常
+                                logLine("心跳持续正常（最近约 50 分钟无异常）");
+                            }
+                        });
+                    } else {
+                        final String e = err;
+                        heartbeatOkStreak = 0;
+                        mainHandler.post(() -> {
+                            // 同一错误 30 分钟内只记一次，避免日志面板被刷满
+                            long now = System.currentTimeMillis();
+                            boolean same = e.equals(lastHeartbeatError);
+                            if (!same || now - lastHeartbeatErrorAt > 30 * 60 * 1000L) {
+                                lastHeartbeatError = e;
+                                lastHeartbeatErrorAt = now;
+                                logLine("心跳状态错误，请重新配置或切换网络环境!\n错误详情：" + e);
                             }
                         });
                     }
-
-                    @Override
-                    public void onResponse(Call call, Response response) throws IOException {
-                        Log.d(TAG, "onResponse heard: " + response.body().string());
-                    }
-                });
+                }
 
                 try {
                     Thread.sleep(50 * 1000);
@@ -140,6 +141,52 @@ public class PayNotificationListenerService extends NotificationListenerService 
             }
         });
         newThread.start();
+    }
+
+    /**
+     * 执行一次心跳，内部带 3 次快速重试。
+     * 成功返回 null，失败返回最后一次错误描述。
+     * 用 https 直连，避开 http 到 https 的 301 跳转（少一次往返、少一个失败点）。
+     */
+    private String heartbeatOnce() {
+        final long[] delays = {0L, 2000L, 5000L};
+        String lastErr = null;
+        for (int i = 0; i < delays.length; i++) {
+            if (delays[i] > 0) {
+                try {
+                    Thread.sleep(delays[i]);
+                } catch (InterruptedException ignored) {
+                    return "interrupted";
+                }
+            }
+            String t = String.valueOf(new Date().getTime());
+            String sign = md5(t + key);
+            Request request = new Request.Builder()
+                    .url("https://" + host + "/appHeart?t=" + t + "&sign=" + sign)
+                    .method("GET", null)
+                    .build();
+            try (Response response = okHttpClient.newCall(request).execute()) {
+                String body = response.body() == null ? "" : response.body().string();
+                Log.d(TAG, "心跳返回(" + (i + 1) + "/" + delays.length + "): " + body);
+                if (response.isSuccessful()) {
+                    return null;
+                }
+                lastErr = "HTTP " + response.code();
+            } catch (IOException e) {
+                lastErr = (e.getMessage() == null || e.getMessage().isEmpty())
+                        ? e.getClass().getSimpleName() : e.getMessage();
+                Log.w(TAG, "心跳失败(" + (i + 1) + "/" + delays.length + "): " + lastErr);
+            }
+        }
+        return lastErr;
+    }
+
+    /** 写一条监控日志（日志面板最多保留 20 行） */
+    private void logLine(String msg) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            sendMonitorLogs(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date())
+                    + "\r\r\r\r" + msg);
+        }
     }
 
 

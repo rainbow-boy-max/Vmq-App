@@ -11,8 +11,8 @@ android {
         applicationId = "com.shinian.pay"
         minSdk = 21
         targetSdk = 34
-        versionCode = 13
-        versionName = "3.0"
+        versionCode = 131
+        versionName = "3.1.1-fix"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -22,13 +22,14 @@ android {
         }
     }
 
-    // 签名配置
+    // 签名配置：自签 PKCS12（口令由 CI Secrets 注入）
     signingConfigs {
         release {
-            storeFile file("${projectDir}/keystore/keystore.jks")
+            storeFile file("${projectDir}/keystore/keystore.p12")
             storePassword System.getenv("KEYSTORE_PASSWORD") ?: project.hasProperty("KEYSTORE_PASSWORD") ? project.property("KEYSTORE_PASSWORD") : ""
             keyAlias System.getenv("KEY_ALIAS") ?: (project.hasProperty("KEY_ALIAS") ? project.property("KEY_ALIAS") : "")
             keyPassword System.getenv("KEY_PASSWORD") ?: (project.hasProperty("KEY_PASSWORD") ? project.property("KEY_PASSWORD") : "")
+            storeType "pkcs12"
         }
     }
 

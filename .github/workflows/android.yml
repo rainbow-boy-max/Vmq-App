@@ -44,7 +44,7 @@ jobs:
       DEBUG_APK_PATH: app/build/outputs/apk/debug/app-debug.apk
       RELEASE_APK_PATH: app/build/outputs/apk/release/app-release.apk
       UNSIGNED_APK_PATH: app/build/outputs/apk/release/app-release-unsigned.apk
-      KEYSTORE_DEFAULT_PATH: app/keystore/keystore.jks
+      KEYSTORE_DEFAULT_PATH: app/keystore/keystore.p12
 
     steps:
       # 检出代码
